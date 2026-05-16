@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSurveyStore } from '@/stores/survey'
-import type { Question } from '@/types/survey'
+import type { LogicCondition, Question } from '@/types/survey'
+import { SurveyStatus } from '@/types/survey'
 import RadioQuestion from '@/components/form/RadioQuestion.vue'
 import CheckboxQuestion from '@/components/form/CheckboxQuestion.vue'
 import InputQuestion from '@/components/form/InputQuestion.vue'
@@ -21,37 +22,42 @@ const answers = ref<Record<string, unknown>>({})
 const currentQuestionIndex = ref(0)
 const errors = ref<Record<string, string>>({})
 const isSubmitting = ref(false)
+const sessionQuestions = ref<Question[]>([])
 
 onMounted(() => {
   if (!survey.value) {
-    router.push('/')
+    return
   }
+  initializeSession()
+})
+
+const progressKey = computed(() => `smart-survey-progress-${surveyId.value}`)
+
+const isExpired = computed(() => {
+  if (!survey.value?.settings.closeDate) return false
+  const closeTime = new Date(survey.value.settings.closeDate).getTime()
+  return Number.isFinite(closeTime) && Date.now() > closeTime
+})
+
+const canFill = computed(() => {
+  return !!survey.value && survey.value.status === SurveyStatus.Published && !isExpired.value
+})
+
+const unavailableReason = computed(() => {
+  if (!survey.value) return '问卷不存在'
+  if (survey.value.status === SurveyStatus.Draft) return '问卷仍是草稿，暂不能填写'
+  if (survey.value.status === SurveyStatus.Closed) return '问卷已关闭，暂不能填写'
+  if (isExpired.value) return '问卷已超过关闭时间，暂不能填写'
+  return ''
 })
 
 const visibleQuestions = computed(() => {
-  if (!survey.value) return []
-  let questions = [...survey.value.questions]
+  if (!survey.value || !canFill.value) return []
 
-  if (survey.value.settings.randomizeQuestions) {
-    questions = questions.sort(() => Math.random() - 0.5)
-  }
-
-  return questions.filter((q) => {
+  return sessionQuestions.value.filter((q) => {
     if (!q.logic) return true
 
-    const conditionMet = q.logic.conditions.every((cond) => {
-      const answer = answers.value[cond.questionId]
-      switch (cond.operator) {
-        case 'equals':
-          return answer === cond.value
-        case 'not_equals':
-          return answer !== cond.value
-        case 'contains':
-          return Array.isArray(answer) && answer.includes(cond.value as string)
-        default:
-          return true
-      }
-    })
+    const conditionMet = areConditionsMet(q.logic.conditions)
 
     if (q.logic.action === 'show') return conditionMet
     if (q.logic.action === 'hide') return !conditionMet
@@ -63,7 +69,7 @@ const currentQuestion = computed(() => visibleQuestions.value[currentQuestionInd
 
 const progress = computed(() => {
   if (visibleQuestions.value.length === 0) return 0
-  return Math.round((currentQuestionIndex.value / visibleQuestions.value.length) * 100)
+  return Math.round(((currentQuestionIndex.value + 1) / visibleQuestions.value.length) * 100)
 })
 
 const isLastQuestion = computed(() => {
@@ -96,13 +102,39 @@ function validateQuestion(question: Question): boolean {
 
   if (question.validation) {
     const { type, value, message } = question.validation
-    if (type === 'min_length' && typeof answer === 'string' && answer.length < (value as number)) {
+    const numericValue = Number(value)
+    if (type === 'min_length' && typeof answer === 'string' && answer.length < numericValue) {
       errors.value[question.id] = message
       return false
     }
-    if (type === 'max_length' && typeof answer === 'string' && answer.length > (value as number)) {
+    if (type === 'max_length' && typeof answer === 'string' && answer.length > numericValue) {
       errors.value[question.id] = message
       return false
+    }
+    if (type === 'pattern' && typeof answer === 'string' && value) {
+      try {
+        if (!new RegExp(String(value)).test(answer)) {
+          errors.value[question.id] = message
+          return false
+        }
+      } catch {
+        errors.value[question.id] = '校验规则配置有误'
+        return false
+      }
+    }
+    if (type === 'range') {
+      const [min, max] = String(value).split(',').map((item) => Number(item.trim()))
+      const answerValue = typeof answer === 'number' ? answer : Number(answer)
+      if (
+        !Number.isFinite(min) ||
+        !Number.isFinite(max) ||
+        !Number.isFinite(answerValue) ||
+        answerValue < min ||
+        answerValue > max
+      ) {
+        errors.value[question.id] = message
+        return false
+      }
     }
   }
 
@@ -114,6 +146,13 @@ function next(): void {
   if (!currentQuestion.value) return
 
   if (!validateQuestion(currentQuestion.value)) return
+
+  const jumpIndex = getJumpTargetIndex(currentQuestion.value)
+  if (jumpIndex !== null) {
+    currentQuestionIndex.value = jumpIndex
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    return
+  }
 
   if (!isLastQuestion.value) {
     currentQuestionIndex.value++
@@ -129,14 +168,21 @@ function prev(): void {
 }
 
 async function submit(): Promise<void> {
-  if (!validateQuestion(currentQuestion.value)) return
+  if (!canFill.value) return
+  if (!currentQuestion.value) return
+  if (!validateAllQuestions()) return
 
   isSubmitting.value = true
 
   await new Promise((resolve) => setTimeout(resolve, 500))
 
   if (survey.value) {
-    store.submitResponse(survey.value.id, answers.value)
+    const response = store.submitResponse(survey.value.id, answers.value)
+    if (!response) {
+      isSubmitting.value = false
+      return
+    }
+    localStorage.removeItem(progressKey.value)
   }
 
   router.push('/thanks')
@@ -145,6 +191,119 @@ async function submit(): Promise<void> {
 function goHome(): void {
   router.push('/')
 }
+
+function validateAllQuestions(): boolean {
+  const firstInvalidIndex = visibleQuestions.value.findIndex((question) => !validateQuestion(question))
+  if (firstInvalidIndex !== -1) {
+    currentQuestionIndex.value = firstInvalidIndex
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    return false
+  }
+  return true
+}
+
+function initializeSession(): void {
+  if (!survey.value) return
+
+  let questions = cloneData(survey.value.questions)
+  if (survey.value.settings.randomizeQuestions) {
+    questions = shuffleArray(questions)
+  }
+
+  if (survey.value.settings.randomizeOptions) {
+    questions = questions.map((question) => {
+      if (!question.options) return question
+      return {
+        ...question,
+        options: shuffleArray(question.options)
+      }
+    })
+  }
+
+  sessionQuestions.value = questions
+
+  if (survey.value.settings.allowSave) {
+    answers.value = loadProgress()
+  }
+
+  seedSortAnswers()
+}
+
+function seedSortAnswers(): void {
+  sessionQuestions.value.forEach((question) => {
+    if (question.type !== 'sort' || answers.value[question.id] !== undefined) return
+    answers.value[question.id] = (question.options || []).map((option) => option.value)
+  })
+}
+
+function areConditionsMet(conditions: LogicCondition[]): boolean {
+  return conditions.every((condition) => {
+    const answer = answers.value[condition.questionId]
+    switch (condition.operator) {
+      case 'equals':
+        return answer === condition.value
+      case 'not_equals':
+        return answer !== condition.value
+      case 'contains':
+        return Array.isArray(answer) && answer.includes(condition.value as string)
+      case 'greater_than':
+        return Number(answer) > Number(condition.value)
+      case 'less_than':
+        return Number(answer) < Number(condition.value)
+      default:
+        return true
+    }
+  })
+}
+
+function getJumpTargetIndex(question: Question): number | null {
+  if (!question.logic || question.logic.action !== 'jump' || !question.logic.targetQuestionId) {
+    return null
+  }
+  if (!areConditionsMet(question.logic.conditions)) return null
+  const targetIndex = visibleQuestions.value.findIndex((q) => q.id === question.logic?.targetQuestionId)
+  return targetIndex >= 0 ? targetIndex : null
+}
+
+function cloneData<T>(data: T): T {
+  return JSON.parse(JSON.stringify(data)) as T
+}
+
+function shuffleArray<T>(items: T[]): T[] {
+  const shuffled = [...items]
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+  return shuffled
+}
+
+function loadProgress(): Record<string, unknown> {
+  try {
+    const saved = localStorage.getItem(progressKey.value)
+    return saved ? JSON.parse(saved) : {}
+  } catch {
+    return {}
+  }
+}
+
+watch(
+  answers,
+  (value) => {
+    if (!survey.value?.settings.allowSave || !canFill.value) return
+    localStorage.setItem(progressKey.value, JSON.stringify(value))
+  },
+  { deep: true }
+)
+
+watch(
+  visibleQuestions,
+  (questions) => {
+    if (currentQuestionIndex.value >= questions.length) {
+      currentQuestionIndex.value = Math.max(questions.length - 1, 0)
+    }
+  }
+)
 </script>
 
 <template>
@@ -161,7 +320,7 @@ function goHome(): void {
       </div>
     </header>
 
-    <main v-if="survey" class="main">
+    <main v-if="survey && canFill" class="main">
       <div class="survey-container">
         <div v-if="currentQuestion" class="question-card">
           <div class="question-header">
@@ -268,6 +427,16 @@ function goHome(): void {
       </div>
     </main>
 
+    <main v-else class="main">
+      <div class="survey-container">
+        <div class="question-card unavailable-card">
+          <h2 class="question-title">{{ unavailableReason }}</h2>
+          <p class="question-desc">请确认问卷链接或联系发布者。</p>
+          <button class="btn-nav btn-next" @click="goHome">返回首页</button>
+        </div>
+      </div>
+    </main>
+
     <footer class="footer">
       <button class="btn-home" @click="goHome">返回首页</button>
     </footer>
@@ -339,6 +508,17 @@ function goHome(): void {
   border-radius: $radius-xl;
   padding: $spacing-xl;
   box-shadow: $shadow-md;
+}
+
+.unavailable-card {
+  text-align: center;
+
+  .btn-nav {
+    display: inline-flex;
+    justify-content: center;
+    margin-top: $spacing-md;
+    max-width: 180px;
+  }
 }
 
 .question-header {
@@ -430,7 +610,7 @@ function goHome(): void {
 }
 
 .btn-submit {
-  background: linear-gradient(135deg, $color-success, darken($color-success, 10%));
+  background: linear-gradient(135deg, $color-success, #059669);
   color: $text-white;
 
   &:hover:not(:disabled) {

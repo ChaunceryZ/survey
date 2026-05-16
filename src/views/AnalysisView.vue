@@ -133,6 +133,7 @@ function handleResize(): void {
 }
 
 const totalResponses = computed(() => responses.value.length)
+const canExport = computed(() => !!survey.value && responses.value.length > 0)
 
 const completionRate = computed(() => {
   if (!survey.value || totalResponses.value === 0) return 0
@@ -191,23 +192,61 @@ function getAverageScale(question: Question): number | null {
   return values.reduce((a, b) => a + b, 0) / values.length
 }
 
-function getMatrixRowSummary(question: Question, rowId: string): string {
-  if (!question.matrixConfig) return '-'
-  const counts: Record<string, number> = {}
-  question.matrixConfig.columns.forEach((c) => (counts[c.label] = 0))
+function getMatrixRowDistribution(
+  question: Question,
+  rowId: string
+): { label: string; count: number; percentage: number }[] {
+  if (!question.matrixConfig || totalResponses.value === 0) return []
 
-  responses.value.forEach((r) => {
-    const answer = r.answers[question.id] as Record<string, string | number> | undefined
-    if (!answer || answer[rowId] === undefined) return
-    const col = question.matrixConfig!.columns.find((c) => String(c.id) === String(answer[rowId]))
-    if (col) counts[col.label]++
+  const counts: Record<string, number> = {}
+  question.matrixConfig.columns.forEach((column) => {
+    counts[column.label] = 0
   })
 
-  const max = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]
-  return max ? `${max[1]}人选择 "${max[0]}"` : '-'
+  responses.value.forEach((response) => {
+    const answer = response.answers[question.id] as Record<string, string | number> | undefined
+    if (!answer || answer[rowId] === undefined) return
+    const column = question.matrixConfig!.columns.find(
+      (item) => String(item.id) === String(answer[rowId])
+    )
+    if (column) counts[column.label]++
+  })
+
+  return Object.entries(counts).map(([label, count]) => ({
+    label,
+    count,
+    percentage: Math.round((count / totalResponses.value) * 100)
+  }))
+}
+
+function getSortStats(
+  question: Question
+): { label: string; averageRank: number | null; count: number }[] {
+  if (!question.options) return []
+
+  return question.options.map((option) => {
+    let rankSum = 0
+    let count = 0
+
+    responses.value.forEach((response) => {
+      const answer = response.answers[question.id]
+      if (!Array.isArray(answer)) return
+      const rank = answer.findIndex((value) => value === option.value)
+      if (rank === -1) return
+      rankSum += rank + 1
+      count++
+    })
+
+    return {
+      label: option.label,
+      averageRank: count > 0 ? rankSum / count : null,
+      count
+    }
+  })
 }
 
 function exportData(): void {
+  if (!survey.value || responses.value.length === 0) return
   const data = {
     survey: survey.value,
     responses: responses.value,
@@ -322,7 +361,7 @@ function goBack(): void {
         </button>
         <h1>数据分析</h1>
         <div class="export-actions">
-          <button class="btn-export" @click="exportData">
+          <button class="btn-export" :disabled="!canExport" @click="exportData">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
               <polyline points="7 10 12 15 17 10" />
@@ -330,7 +369,7 @@ function goBack(): void {
             </svg>
             JSON
           </button>
-          <button class="btn-export btn-export--csv" @click="exportCSV">
+          <button class="btn-export btn-export--csv" :disabled="!canExport" @click="exportCSV">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
               <polyline points="14 2 14 8 20 8" />
@@ -407,7 +446,35 @@ function goBack(): void {
                   class="matrix-row-stat"
                 >
                   <span class="matrix-row-label">{{ row.label }}</span>
-                  <span class="matrix-row-value">{{ getMatrixRowSummary(question, row.id) }}</span>
+                  <div class="matrix-distribution">
+                    <div
+                      v-for="item in getMatrixRowDistribution(question, row.id)"
+                      :key="item.label"
+                      class="matrix-option-stat"
+                    >
+                      <span>{{ item.label }}</span>
+                      <div class="matrix-bar">
+                        <div class="matrix-bar-fill" :style="{ width: `${item.percentage}%` }" />
+                      </div>
+                      <strong>{{ item.count }}</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="question.type === 'sort'">
+              <div class="sort-stats">
+                <div
+                  v-for="item in getSortStats(question)"
+                  :key="item.label"
+                  class="sort-stat"
+                >
+                  <span>{{ item.label }}</span>
+                  <strong>
+                    {{ item.averageRank === null ? '-' : item.averageRank.toFixed(1) }}
+                  </strong>
+                  <small>平均名次</small>
                 </div>
               </div>
             </template>
@@ -502,15 +569,20 @@ h1 {
     height: 18px;
   }
 
-  &:hover {
+  &:hover:not(:disabled) {
     background: $color-primary-hover;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   &--csv {
     background: $color-success;
 
-    &:hover {
-      background: darken($color-success, 10%);
+    &:hover:not(:disabled) {
+      background: #059669;
     }
   }
 }
@@ -667,9 +739,6 @@ h1 {
 }
 
 .matrix-row-stat {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
   padding: $spacing-sm $spacing-md;
   background: $bg-secondary;
   border-radius: $radius-md;
@@ -680,9 +749,66 @@ h1 {
   color: $text-primary;
 }
 
-.matrix-row-value {
-  font-size: 0.875rem;
+.matrix-distribution {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-xs;
+  margin-top: $spacing-sm;
+}
+
+.matrix-option-stat {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) 2fr 36px;
+  align-items: center;
+  gap: $spacing-sm;
+  font-size: 0.8125rem;
   color: $text-secondary;
+
+  strong {
+    text-align: right;
+    color: $text-primary;
+  }
+}
+
+.matrix-bar {
+  height: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: $radius-full;
+}
+
+.matrix-bar-fill {
+  height: 100%;
+  background: $color-primary;
+  border-radius: $radius-full;
+}
+
+.sort-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: $spacing-sm;
+}
+
+.sort-stat {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: $spacing-xs;
+  padding: $spacing-md;
+  background: $bg-secondary;
+  border-radius: $radius-md;
+
+  span {
+    color: $text-primary;
+  }
+
+  strong {
+    color: $color-primary;
+  }
+
+  small {
+    grid-column: 1 / -1;
+    color: $text-muted;
+  }
 }
 
 .text-responses {

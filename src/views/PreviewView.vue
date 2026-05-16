@@ -79,6 +79,47 @@ function goBack(): void {
                   <span>{{ question.scaleConfig?.max || 5 }}</span>
                 </div>
               </template>
+              <template v-else-if="question.type === 'matrix' && question.matrixConfig">
+                <div class="matrix-placeholder">
+                  <div
+                    class="matrix-row matrix-head"
+                    :style="{ gridTemplateColumns: `minmax(120px, 1fr) repeat(${question.matrixConfig.columns.length}, minmax(80px, 1fr))` }"
+                  >
+                    <span></span>
+                    <span
+                      v-for="col in question.matrixConfig.columns"
+                      :key="col.id"
+                    >
+                      {{ col.label }}
+                    </span>
+                  </div>
+                  <div
+                    v-for="row in question.matrixConfig.rows"
+                    :key="row.id"
+                    class="matrix-row"
+                    :style="{ gridTemplateColumns: `minmax(120px, 1fr) repeat(${question.matrixConfig.columns.length}, minmax(80px, 1fr))` }"
+                  >
+                    <strong>{{ row.label }}</strong>
+                    <span
+                      v-for="col in question.matrixConfig.columns"
+                      :key="col.id"
+                      class="matrix-dot"
+                    />
+                  </div>
+                </div>
+              </template>
+              <template v-else-if="question.type === 'sort'">
+                <div class="sort-placeholder">
+                  <div
+                    v-for="(option, optionIndex) in question.options"
+                    :key="option.id"
+                    class="sort-item"
+                  >
+                    <span>{{ optionIndex + 1 }}</span>
+                    <p>{{ option.label }}</p>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
         </div>
@@ -164,7 +205,7 @@ function goBack(): void {
   gap: $spacing-sm;
   padding: $spacing-md;
   background: rgba($color-warning, 0.1);
-  color: darken($color-warning, 15%);
+  color: #b45309;
   border-radius: $radius-lg;
   margin-bottom: $spacing-lg;
   font-size: 0.875rem;
@@ -266,6 +307,91 @@ function goBack(): void {
     flex: 1;
     text-align: center;
     letter-spacing: 2px;
+  }
+}
+
+.matrix-placeholder {
+  overflow-x: auto;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: $radius-lg;
+}
+
+.matrix-row {
+  display: grid;
+  min-width: 520px;
+
+  > * {
+    padding: $spacing-sm;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    text-align: center;
+    color: $text-secondary;
+    font-size: 0.8125rem;
+  }
+
+  strong {
+    text-align: left;
+    color: $text-primary;
+    background: $bg-secondary;
+  }
+
+  &:last-child > * {
+    border-bottom: 0;
+  }
+}
+
+.matrix-head {
+  background: rgba($color-primary, 0.08);
+
+  span {
+    font-weight: 600;
+    color: $color-primary;
+  }
+}
+
+.matrix-dot {
+  position: relative;
+
+  &::after {
+    content: '';
+    display: block;
+    width: 16px;
+    height: 16px;
+    margin: 0 auto;
+    border: 2px solid rgba(0, 0, 0, 0.2);
+    border-radius: $radius-full;
+  }
+}
+
+.sort-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.sort-item {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  padding: $spacing-sm $spacing-md;
+  background: $bg-secondary;
+  border-radius: $radius-md;
+
+  span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: $radius-full;
+    background: rgba($color-primary, 0.1);
+    color: $color-primary;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  p {
+    color: $text-secondary;
+    font-size: 0.9375rem;
   }
 }
 

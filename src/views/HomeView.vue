@@ -43,11 +43,13 @@ function editSurvey(id: string): void {
   router.push(`/edit/${id}`)
 }
 
-function fillSurvey(id: string): void {
+function fillSurvey(id: string, event?: Event): void {
+  event?.stopPropagation()
   router.push(`/fill/${id}`)
 }
 
-function viewAnalysis(id: string): void {
+function viewAnalysis(id: string, event?: Event): void {
+  event?.stopPropagation()
   router.push(`/analysis/${id}`)
 }
 
@@ -106,7 +108,7 @@ function duplicateSurvey(id: string, event: Event): void {
                   v-if="survey.status === SurveyStatus.Published"
                   class="action-btn"
                   title="填写问卷"
-                  @click="fillSurvey(survey.id)"
+                  @click="fillSurvey(survey.id, $event)"
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
@@ -117,7 +119,7 @@ function duplicateSurvey(id: string, event: Event): void {
                   v-if="survey.questions.length > 0"
                   class="action-btn"
                   title="数据分析"
-                  @click="viewAnalysis(survey.id)"
+                  @click="viewAnalysis(survey.id, $event)"
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M18 20V10M12 20V4M6 20v-6" />

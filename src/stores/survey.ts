@@ -10,6 +10,64 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substring(2)
 }
 
+function cloneData<T>(data: T): T {
+  return JSON.parse(JSON.stringify(data)) as T
+}
+
+function isSurveyExpired(survey: Survey): boolean {
+  if (!survey.settings.closeDate) return false
+  const closeTime = new Date(survey.settings.closeDate).getTime()
+  return Number.isFinite(closeTime) && Date.now() > closeTime
+}
+
+function cloneQuestionsForDuplicate(questions: Question[]): Question[] {
+  const questionIdMap = new Map<string, string>()
+
+  questions.forEach((question) => {
+    questionIdMap.set(question.id, generateId())
+  })
+
+  return questions.map((question) => {
+    const cloned = cloneData(question)
+    cloned.id = questionIdMap.get(question.id) || generateId()
+
+    if (cloned.options) {
+      cloned.options = cloned.options.map((option) => ({
+        ...option,
+        id: generateId()
+      }))
+    }
+
+    if (cloned.matrixConfig) {
+      cloned.matrixConfig = {
+        rows: cloned.matrixConfig.rows.map((row) => ({
+          ...row,
+          id: generateId()
+        })),
+        columns: cloned.matrixConfig.columns.map((column) => ({
+          ...column,
+          id: generateId()
+        }))
+      }
+    }
+
+    if (cloned.logic) {
+      cloned.logic = {
+        ...cloned.logic,
+        conditions: cloned.logic.conditions.map((condition) => ({
+          ...condition,
+          questionId: questionIdMap.get(condition.questionId) || condition.questionId
+        })),
+        targetQuestionId: cloned.logic.targetQuestionId
+          ? questionIdMap.get(cloned.logic.targetQuestionId) || cloned.logic.targetQuestionId
+          : undefined
+      }
+    }
+
+    return cloned
+  })
+}
+
 function loadFromStorage<T>(key: string, defaultValue: T): T {
   try {
     const data = localStorage.getItem(key)
@@ -54,12 +112,13 @@ export const useSurveyStore = defineStore('survey', () => {
   // Actions
   function createSurvey(data: Partial<Survey> = {}): Survey {
     const now = new Date().toISOString()
+    const clonedData = cloneData(data)
     const survey: Survey = {
       id: generateId(),
-      title: data.title || '未命名问卷',
-      description: data.description || '',
-      questions: data.questions || [],
-      settings: data.settings || {
+      title: clonedData.title || '未命名问卷',
+      description: clonedData.description || '',
+      questions: clonedData.questions || [],
+      settings: clonedData.settings || {
         allowSave: true,
         showProgress: true,
         randomizeQuestions: false,
@@ -78,9 +137,12 @@ export const useSurveyStore = defineStore('survey', () => {
     const index = surveys.value.findIndex((s) => s.id === id)
     if (index === -1) return null
 
+    const clonedData = cloneData(data)
     surveys.value[index] = {
       ...surveys.value[index],
-      ...data,
+      ...clonedData,
+      id: surveys.value[index].id,
+      createdAt: surveys.value[index].createdAt,
       updatedAt: new Date().toISOString()
     }
     saveToStorage(STORAGE_KEY, surveys.value)
@@ -111,7 +173,9 @@ export const useSurveyStore = defineStore('survey', () => {
     if (!original) return null
 
     return createSurvey({
-      ...original,
+      description: original.description,
+      questions: cloneQuestionsForDuplicate(original.questions),
+      settings: cloneData(original.settings),
       title: `${original.title} (副本)`,
       status: Status.Draft
     })
@@ -194,11 +258,12 @@ export const useSurveyStore = defineStore('survey', () => {
   function submitResponse(surveyId: string, answers: Record<string, unknown>): SurveyResponse | null {
     const survey = surveys.value.find((s) => s.id === surveyId)
     if (!survey) return null
+    if (survey.status !== Status.Published || isSurveyExpired(survey)) return null
 
     const response: SurveyResponse = {
       id: generateId(),
       surveyId,
-      answers,
+      answers: cloneData(answers),
       submittedAt: new Date().toISOString()
     }
 

@@ -1,9 +1,17 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import type { Question, QuestionType, QuestionOption } from '@/types/survey'
+import { computed, ref, watch } from 'vue'
+import type {
+  LogicAction,
+  LogicOperator,
+  Question,
+  QuestionType,
+  QuestionOption,
+  ValidationType
+} from '@/types/survey'
 
 interface Props {
   question: Question
+  questions: Question[]
   types: { type: QuestionType; label: string; icon: string }[]
 }
 
@@ -14,12 +22,41 @@ const emit = defineEmits<{
   (e: 'cancel'): void
 }>()
 
-const localQuestion = ref<Question>({ ...props.question })
+const validationTypes: { type: ValidationType; label: string }[] = [
+  { type: 'min_length', label: '最小长度' },
+  { type: 'max_length', label: '最大长度' },
+  { type: 'pattern', label: '正则表达式' },
+  { type: 'range', label: '数值范围' }
+]
+
+const logicOperators: { operator: LogicOperator; label: string }[] = [
+  { operator: 'equals', label: '等于' },
+  { operator: 'not_equals', label: '不等于' },
+  { operator: 'contains', label: '包含' },
+  { operator: 'greater_than', label: '大于' },
+  { operator: 'less_than', label: '小于' }
+]
+
+const logicActions: { action: LogicAction; label: string }[] = [
+  { action: 'show', label: '显示本题' },
+  { action: 'hide', label: '隐藏本题' },
+  { action: 'jump', label: '跳转到题目' }
+]
+
+function cloneQuestion(question: Question): Question {
+  return JSON.parse(JSON.stringify(question)) as Question
+}
+
+const localQuestion = ref<Question>(cloneQuestion(props.question))
+
+const availableLogicQuestions = computed(() =>
+  props.questions.filter((question) => question.id !== localQuestion.value.id)
+)
 
 watch(
   () => props.question,
   (newVal) => {
-    localQuestion.value = { ...newVal }
+    localQuestion.value = cloneQuestion(newVal)
   },
   { deep: true }
 )
@@ -62,8 +99,55 @@ function addMatrixColumn(): void {
   })
 }
 
+function enableValidation(): void {
+  localQuestion.value.validation = {
+    type: 'min_length',
+    value: 1,
+    message: '回答不符合要求'
+  }
+}
+
+function disableValidation(): void {
+  localQuestion.value.validation = undefined
+}
+
+function enableLogic(): void {
+  const firstQuestion = availableLogicQuestions.value[0]
+  localQuestion.value.logic = {
+    conditions: firstQuestion
+      ? [
+          {
+            questionId: firstQuestion.id,
+            operator: 'equals',
+            value: ''
+          }
+        ]
+      : [],
+    action: 'show'
+  }
+}
+
+function disableLogic(): void {
+  localQuestion.value.logic = undefined
+}
+
+function addLogicCondition(): void {
+  if (!localQuestion.value.logic) return
+  const firstQuestion = availableLogicQuestions.value[0]
+  if (!firstQuestion) return
+  localQuestion.value.logic.conditions.push({
+    questionId: firstQuestion.id,
+    operator: 'equals',
+    value: ''
+  })
+}
+
+function removeLogicCondition(index: number): void {
+  localQuestion.value.logic?.conditions.splice(index, 1)
+}
+
 function submit(): void {
-  emit('update', { ...localQuestion.value })
+  emit('update', cloneQuestion(localQuestion.value))
 }
 
 function cancel(): void {
@@ -99,6 +183,123 @@ function cancel(): void {
           <input v-model="localQuestion.required" type="checkbox" />
           <span>必答题</span>
         </label>
+      </div>
+
+      <div
+        v-if="localQuestion.type === 'input' || localQuestion.type === 'textarea' || localQuestion.type === 'scale'"
+        class="form-group"
+      >
+        <div class="validation-header">
+          <label class="checkbox-label">
+            <input
+              type="checkbox"
+              :checked="!!localQuestion.validation"
+              @change="($event.target as HTMLInputElement).checked ? enableValidation() : disableValidation()"
+            />
+            <span>自定义校验</span>
+          </label>
+        </div>
+        <div v-if="localQuestion.validation" class="validation-grid">
+          <select v-model="localQuestion.validation.type" class="input">
+            <option
+              v-for="item in validationTypes"
+              :key="item.type"
+              :value="item.type"
+            >
+              {{ item.label }}
+            </option>
+          </select>
+          <input
+            v-model="localQuestion.validation.value"
+            type="text"
+            class="input"
+            placeholder="校验值，例如 6 或 1,5"
+          />
+          <input
+            v-model="localQuestion.validation.message"
+            type="text"
+            class="input validation-message"
+            placeholder="错误提示"
+          />
+        </div>
+      </div>
+
+      <div v-if="availableLogicQuestions.length > 0" class="form-group logic-config">
+        <div class="validation-header">
+          <label class="checkbox-label">
+            <input
+              type="checkbox"
+              :checked="!!localQuestion.logic"
+              @change="($event.target as HTMLInputElement).checked ? enableLogic() : disableLogic()"
+            />
+            <span>条件逻辑</span>
+          </label>
+        </div>
+        <div v-if="localQuestion.logic" class="logic-content">
+          <div
+            v-for="(condition, conditionIndex) in localQuestion.logic.conditions"
+            :key="conditionIndex"
+            class="logic-condition"
+          >
+            <select v-model="condition.questionId" class="input">
+              <option
+                v-for="questionItem in availableLogicQuestions"
+                :key="questionItem.id"
+                :value="questionItem.id"
+              >
+                {{ questionItem.title || '未填写问题' }}
+              </option>
+            </select>
+            <select v-model="condition.operator" class="input">
+              <option
+                v-for="item in logicOperators"
+                :key="item.operator"
+                :value="item.operator"
+              >
+                {{ item.label }}
+              </option>
+            </select>
+            <input
+              v-model="condition.value"
+              type="text"
+              class="input"
+              placeholder="比较值"
+            />
+            <button
+              class="btn-remove"
+              :disabled="localQuestion.logic.conditions.length <= 1"
+              @click="removeLogicCondition(conditionIndex)"
+            >
+              ×
+            </button>
+          </div>
+          <button class="btn-add-option" @click="addLogicCondition">+ 添加条件</button>
+          <div class="logic-action">
+            <select v-model="localQuestion.logic.action" class="input">
+              <option
+                v-for="item in logicActions"
+                :key="item.action"
+                :value="item.action"
+              >
+                {{ item.label }}
+              </option>
+            </select>
+            <select
+              v-if="localQuestion.logic.action === 'jump'"
+              v-model="localQuestion.logic.targetQuestionId"
+              class="input"
+            >
+              <option value="">选择跳转目标</option>
+              <option
+                v-for="questionItem in availableLogicQuestions"
+                :key="questionItem.id"
+                :value="questionItem.id"
+              >
+                {{ questionItem.title || '未填写问题' }}
+              </option>
+            </select>
+          </div>
+        </div>
       </div>
 
       <div
@@ -276,6 +477,46 @@ function cancel(): void {
   display: flex;
   align-items: center;
   gap: $spacing-lg;
+}
+
+.validation-header {
+  display: flex;
+  align-items: center;
+}
+
+.validation-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(120px, 1fr);
+  gap: $spacing-sm;
+
+  .validation-message {
+    grid-column: 1 / -1;
+  }
+}
+
+.logic-config {
+  padding: $spacing-md;
+  background: rgba($color-primary, 0.04);
+  border-radius: $radius-md;
+}
+
+.logic-content {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.logic-condition {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.4fr) minmax(100px, 0.8fr) minmax(100px, 1fr) auto;
+  gap: $spacing-sm;
+  align-items: center;
+}
+
+.logic-action {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: $spacing-sm;
 }
 
 .checkbox-label {

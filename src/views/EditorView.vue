@@ -39,11 +39,15 @@ const showQuestionTypes = ref(false)
 const editingQuestion = ref<Question | null>(null)
 const draggedIndex = ref<number | null>(null)
 
+function cloneData<T>(data: T): T {
+  return JSON.parse(JSON.stringify(data)) as T
+}
+
 onMounted(() => {
   if (surveyId.value) {
     const existing = store.getSurveyById(surveyId.value)
     if (existing) {
-      survey.value = { ...existing }
+      survey.value = cloneData(existing)
     } else {
       router.push('/')
     }
@@ -242,6 +246,7 @@ function goBack(): void {
               <QuestionEditor
                 v-if="editingQuestion?.id === question.id"
                 :question="question"
+                :questions="survey.questions || []"
                 :types="questionTypes"
                 @update="updateQuestion(index, $event)"
                 @cancel="editingQuestion = null"
@@ -293,6 +298,15 @@ function goBack(): void {
               <input v-model="survey.settings!.randomizeOptions" type="checkbox" />
               <span>随机排列选项</span>
             </label>
+          </div>
+          <div class="setting-item">
+            <label class="setting-label" for="closeDate">关闭时间</label>
+            <input
+              id="closeDate"
+              v-model="survey.settings!.closeDate"
+              type="datetime-local"
+              class="setting-input"
+            />
           </div>
         </aside>
       </div>
@@ -358,7 +372,7 @@ function goBack(): void {
   transition: all $transition-fast;
 
   &:hover {
-    background: darken($bg-secondary, 5%);
+    background: #e5e7eb;
   }
 }
 
@@ -546,6 +560,28 @@ function goBack(): void {
 
 .setting-item {
   margin-bottom: $spacing-md;
+}
+
+.setting-label {
+  display: block;
+  margin-bottom: $spacing-xs;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: $text-secondary;
+}
+
+.setting-input {
+  width: 100%;
+  padding: $spacing-sm $spacing-md;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: $radius-md;
+  color: $text-primary;
+
+  &:focus {
+    outline: none;
+    border-color: $color-primary;
+    box-shadow: 0 0 0 3px rgba($color-primary, 0.1);
+  }
 }
 
 .checkbox-label {
